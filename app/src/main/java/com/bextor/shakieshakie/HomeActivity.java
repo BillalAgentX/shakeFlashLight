@@ -46,6 +46,12 @@ public class HomeActivity extends AppCompatActivity {
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
+        Intent number5 = new Intent(getBaseContext(), ShakeHandlerService.class);
+        number5.putExtra("times", 5);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(number5);
+        }
+
         // for notifications permission now required in api 33
         //this allows us to check with multiple permissions, but in this case (currently) only need 1.
         rpl = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), new ActivityResultCallback<Map<String, Boolean>>() {
@@ -61,7 +67,7 @@ public class HomeActivity extends AppCompatActivity {
         });
 
 
-        binding.switchs.setOnToggledListener(new OnToggledListener() {
+/*        binding.switchs.setOnToggledListener(new OnToggledListener() {
             @Override
             public void onSwitched(ToggleableView toggleableView, boolean isOn) {
                 if (isOn) {
@@ -75,7 +81,7 @@ public class HomeActivity extends AppCompatActivity {
                     endService();
                 }
             }
-        });
+        });*/
 
 
 
