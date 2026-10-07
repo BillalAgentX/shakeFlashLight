@@ -29,7 +29,6 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
 
     private NotificationManager mNotificationManager;
     private SensorManager mSensorManager;
-    private Sensor mAccelerometer;
 
     private float mAccel;
     private float mAccelCurrent;
@@ -57,7 +56,7 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
         // Initialize Sensors
         mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         if (mSensorManager != null) {
-            mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            Sensor mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             if (mAccelerometer != null) {
                 mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
             }
@@ -182,7 +181,7 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
             }
         }
 
-        Intent notificationIntent = new Intent(this, MainActivity.class);
+        Intent notificationIntent = new Intent(this, HomeActivity.class);
         notificationIntent.setAction(ACTION.MAIN_ACTION);
         notificationIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
 
@@ -215,9 +214,7 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
                 .setOngoing(true)
                 .setContentIntent(pendingIntent);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            notificationBuilder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
-        }
+        notificationBuilder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
 
         return notificationBuilder.build();
     }
