@@ -13,6 +13,7 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
+import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
@@ -35,13 +36,50 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
     private float mAccelLast;
 
     private boolean flashIsOn = false;
+    private boolean isRunning = false;
+    private int shakeCount = 0;
     private long lastCommandTime = 0;
     private static final float ACCELERATION_AMOUNT = 26.0f;
+
+    /** Binder returned to the bound activity. */
+    private final IBinder mBinder = new LocalBinder();
+
+    /** Optional listener so a bound activity can receive events. */
+    public interface ServiceListener {
+        void onFlashToggled(boolean isOn);
+        void onShakeCountChanged(int count);
+    }
+
+    private ServiceListener mListener;
+
+    public void setListener(ServiceListener listener) {
+        this.mListener = listener;
+    }
+
+    public boolean isRunning() {
+        return isRunning;
+    }
+
+    public int getShakeCount() {
+        return shakeCount;
+    }
+
+    public class LocalBinder extends Binder {
+        public ShakeHandlerService getService() {
+            return ShakeHandlerService.this;
+        }
+    }
 
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
-        return null;
+        return mBinder;
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        mListener = null;
+        return super.onUnbind(intent);
     }
 
     @Override
@@ -50,10 +88,10 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
 
         mNotificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
 
-        // Start Foreground Service with properly constructed notification
+        // Start as foreground service with a proper notification.
         startForeground(NOTIFICATION_ID_FOREGROUND_SERVICE, prepareNotification());
 
-        // Initialize Sensors
+        // Initialize sensors.
         mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         if (mSensorManager != null) {
             Sensor mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
@@ -65,12 +103,13 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
         mAccel = 0.00f;
         mAccelCurrent = SensorManager.GRAVITY_EARTH;
         mAccelLast = SensorManager.GRAVITY_EARTH;
+        isRunning = true;
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) {
-            stopForeground(true);
+            stopForegroundCompat();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -79,7 +118,7 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
             String action = intent.getAction();
             if (ACTION.STOP_ACTION.equals(action)) {
                 turnOffFlash();
-                stopForeground(true);
+                stopForegroundCompat();
                 stopSelf();
                 return START_NOT_STICKY;
             }
@@ -101,19 +140,23 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
         float z = se.values[2];
 
         mAccelLast = mAccelCurrent;
-        mAccelCurrent = (float) Math.sqrt((double) (x * x + y * y + z * z));
+        mAccelCurrent = (float) Math.sqrt(x * x + y * y + z * z);
         float delta = mAccelCurrent - mAccelLast;
-        mAccel = mAccel * 0.9f + delta; // Low-pass filter
+        mAccel = mAccel * 0.9f + delta; // Low-pass filter.
 
         if (mAccel > ACCELERATION_AMOUNT) {
             long currentTime = System.currentTimeMillis();
 
-            // Debounce shake triggers (1 second threshold)
+            // Debounce shake triggers (1 second threshold).
             if (currentTime - lastCommandTime > 1000) {
                 if (!flashIsOn) {
                     turnOnFlash();
                 } else {
                     turnOffFlash();
+                }
+                shakeCount++;
+                if (mListener != null) {
+                    mListener.onShakeCountChanged(shakeCount);
                 }
                 lastCommandTime = currentTime;
             }
@@ -122,7 +165,7 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
 
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {
-        // Not used
+        // Not used.
     }
 
     private void torchToggle(boolean enable) {
@@ -135,6 +178,9 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
                 if (cameraId != null) {
                     camManager.setTorchMode(cameraId, enable);
                     flashIsOn = enable;
+                    if (mListener != null) {
+                        mListener.onFlashToggled(enable);
+                    }
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Failed to toggle torch mode", e);
@@ -167,6 +213,16 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
         torchToggle(false);
     }
 
+    /** Safe wrapper for stopForeground across API levels. */
+    @SuppressWarnings("deprecation")
+    private void stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(true);
+        } else {
+            stopForeground(true);
+        }
+    }
+
     private Notification prepareNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (mNotificationManager.getNotificationChannel(FOREGROUND_CHANNEL_ID) == null) {
@@ -194,7 +250,7 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
 
         Intent stopIntent = new Intent(this, ShakeHandlerService.class);
         stopIntent.setAction(ACTION.STOP_ACTION);
-        PendingIntent pendingStopIntent = PendingIntent.getService(this, 0, stopIntent, flags);
+        PendingIntent pendingStopIntent = PendingIntent.getService(this, 1, stopIntent, flags);
 
         RemoteViews remoteViews = new RemoteViews(getPackageName(), R.layout.notification);
         remoteViews.setOnClickPendingIntent(R.id.btn_stop, pendingStopIntent);
@@ -222,13 +278,17 @@ public class ShakeHandlerService extends Service implements SensorEventListener 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        // Ensure torch is turned off when service stops
+        isRunning = false;
+
+        // Ensure torch is turned off when service stops.
         turnOffFlash();
 
-        // Unregister sensor listener to prevent memory leaks and battery drain
+        // Unregister sensor listener to prevent memory leaks and battery drain.
         if (mSensorManager != null) {
             mSensorManager.unregisterListener(this);
         }
+
+        mListener = null;
     }
 
     public static class ACTION {

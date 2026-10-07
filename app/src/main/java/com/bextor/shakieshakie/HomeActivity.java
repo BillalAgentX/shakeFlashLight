@@ -3,8 +3,16 @@ package com.bextor.shakieshakie;
 import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.util.Log;
+import android.widget.CompoundButton;
 
 import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -12,33 +20,68 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
-import android.content.pm.PackageManager;
-import android.os.Build;
-import android.os.Bundle;
-import android.util.Log;
-import android.view.View;
-
 import com.bextor.shakieshakie.databinding.ActivityMainBinding;
-import com.github.angads25.toggle.interfaces.OnToggledListener;
-import com.github.angads25.toggle.model.ToggleableView;
 
 import java.util.Map;
 
-
-/**
- * Main activity doesn't really do much, but start the service and then finish.
- * In oreo to run a background service when the app is not running it must
- * startForegroundService(Intent)  in the activity
- * in service, make a notification low or higher. persistent.
- * and startForground (int id, Notification notification )
- */
-
 public class HomeActivity extends AppCompatActivity {
-    public static String id1 = "test_channel_01";
-    ActivityResultLauncher<String[]> rpl;
+
+    public static final String TAG = "HomeActivity";
+    public static final String id1 = "test_channel_01";
+
     private final String[] REQUIRED_PERMISSIONS = new String[]{Manifest.permission.POST_NOTIFICATIONS};
-    public static String TAG = "MainActivity";
-    ActivityMainBinding binding;
+
+    private ActivityMainBinding binding;
+    private ActivityResultLauncher<String[]> rpl;
+
+    private ShakeHandlerService mService;
+    private boolean mBound = false;
+
+    /**
+     * Receives the binder from the service and registers a listener so the
+     * activity can update its UI based on service events.
+     */
+    private final ServiceConnection mConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            ShakeHandlerService.LocalBinder binder = (ShakeHandlerService.LocalBinder) service;
+            mService = binder.getService();
+            mBound = true;
+            logthis("Service connected");
+
+            // Sync UI with the current service state.
+
+
+            // Register a listener to react to shake events / flash changes.
+            mService.setListener(new ShakeHandlerService.ServiceListener() {
+                @Override
+                public void onFlashToggled(boolean isOn) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if(isOn)
+                            binding.flIconContainer.setBackground(getResources().getDrawable(R.drawable.flash_light_on));
+                            else
+                                binding.flIconContainer.setBackground(getResources().getDrawable(R.drawable.flash_light_off));
+
+                        }
+                    });
+                }
+
+                @Override
+                public void onShakeCountChanged(int count) {
+                    runOnUiThread(() -> logthis("Shake count: " + count));
+                }
+            });
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            mBound = false;
+            mService = null;
+            logthis("Service disconnected");
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -46,78 +89,91 @@ public class HomeActivity extends AppCompatActivity {
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
-        Intent number5 = new Intent(getBaseContext(), ShakeHandlerService.class);
-        number5.putExtra("times", 5);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(number5);
-        }
-
-        // for notifications permission now required in api 33
-        //this allows us to check with multiple permissions, but in this case (currently) only need 1.
-        rpl = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), new ActivityResultCallback<Map<String, Boolean>>() {
-            @Override
-            public void onActivityResult(Map<String, Boolean> isGranted) {
-                boolean granted = true;
-                for (Map.Entry<String, Boolean> x : isGranted.entrySet()) {
-                    logthis(x.getKey() + " is " + x.getValue());
-                    if (!x.getValue()) granted = false;
-                }
-                if (granted) logthis("Permissions granted for api 33+");
-            }
-        });
-
-
-/*        binding.switchs.setOnToggledListener(new OnToggledListener() {
-            @Override
-            public void onSwitched(ToggleableView toggleableView, boolean isOn) {
-                if (isOn) {
-                    Intent number5 = new Intent(getBaseContext(), ShakeHandlerService.class);
-                    number5.putExtra("times", 5);
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(number5);
+        // For notifications permission now required in API 33+.
+        rpl = registerForActivityResult(
+                new ActivityResultContracts.RequestMultiplePermissions(),
+                new ActivityResultCallback<Map<String, Boolean>>() {
+                    @Override
+                    public void onActivityResult(Map<String, Boolean> isGranted) {
+                        boolean granted = true;
+                        for (Map.Entry<String, Boolean> x : isGranted.entrySet()) {
+                            logthis(x.getKey() + " is " + x.getValue());
+                            if (!x.getValue()) granted = false;
+                        }
+                        if (granted) logthis("Permissions granted for API 33+");
                     }
-                }
-                else{
-                    endService();
-                }
-            }
-        });*/
+                });
 
+        createChannel();
 
-
-
-        createchannel();  //needed for the persistent notification created in service.
-        //for the new api 33+ notifications permissions.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (!allPermissionsGranted()) {
                 rpl.launch(REQUIRED_PERMISSIONS);
             }
         }
-    }
-    private void endService() {
-        stopService(new Intent(HomeActivity.this, ShakeHandlerService.class));
-    }
-    /**
-     * for API 26+ create notification channels
-     */
-    private void createchannel() {
-        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        NotificationChannel mChannel = null;   //importance level
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            mChannel = new NotificationChannel(id1, getString(R.string.channel_name),  //name of the channel
-                    NotificationManager.IMPORTANCE_LOW);
 
-            //important level: default is is high on the phone.  high is urgent on the phone.  low is medium, so none is low?
-            // Configure the notification channel.
+    /*    // Toggle switch now starts/stops the service.
+        binding.switchs.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    startShakeService();
+                } else {
+                    stopShakeService();
+                }
+            }
+        });*/
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // Bind to the service if it is already running.
+        Intent intent = new Intent(this, ShakeHandlerService.class);
+        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (mBound) {
+            if (mService != null) {
+                mService.setListener(null);
+            }
+            unbindService(mConnection);
+            mBound = false;
+        }
+    }
+
+    /** Start the shake handler as a foreground service. */
+    private void startShakeService() {
+        Intent intent = new Intent(this, ShakeHandlerService.class);
+        intent.putExtra("times", 5);
+        ContextCompat.startForegroundService(this, intent);
+    }
+
+    /** Stop the shake handler service. */
+    private void stopShakeService() {
+        Intent intent = new Intent(this, ShakeHandlerService.class);
+        intent.setAction(ShakeHandlerService.ACTION.STOP_ACTION);
+        startService(intent);
+    }
+
+    /** For API 26+ create notification channels. */
+    private void createChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            NotificationChannel mChannel = new NotificationChannel(
+                    id1,
+                    getString(R.string.channel_name),
+                    NotificationManager.IMPORTANCE_LOW);
             mChannel.setDescription(getString(R.string.channel_description));
             mChannel.enableLights(true);
-            // Sets the notification light color for notifications posted to this channel, if the device supports this feature.
             mChannel.setShowBadge(true);
             nm.createNotificationChannel(mChannel);
         }
     }
 
-    //ask for permissions when we start.
     private boolean allPermissionsGranted() {
         for (String permission : REQUIRED_PERMISSIONS) {
             if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
@@ -130,5 +186,4 @@ public class HomeActivity extends AppCompatActivity {
     public void logthis(String msg) {
         Log.d(TAG, msg);
     }
-
 }
